@@ -1339,7 +1339,7 @@ class ServiceInfo(object):
     """Service information"""
 
     def __init__(self, type_, name, address=None, port=None, weight=0,
-                 priority=0, properties=None, server=None):
+                 priority=0, properties=None, server=None, addresses=None):
         """Create a service description.
 
         type_: fully qualified service type name
@@ -1352,11 +1352,25 @@ class ServiceInfo(object):
                     bytes for the text field)
         server: fully qualified name for service host (defaults to name)"""
 
+        # Accept both none, or one, but not both.
+        assert (address is None and addresses is None) or \
+               (address is None and addresses) or \
+               (address and addresses is None)
+
         if not type_.endswith(service_type_name(name)):
             raise BadTypeInNameException
         self.type = type_
         self.name = name
-        self.address = address
+
+        if addresses is not None:
+            self.addresses = addresses
+        elif address is not None:
+            if isinstance(address, list):
+                self.addresses = address
+            else:
+                self.addresses = [address]
+        else:
+            self.addresses = []
         self.port = port
         self.weight = weight
         self.priority = priority
@@ -1446,7 +1460,8 @@ class ServiceInfo(object):
             if record.type == _TYPE_A:
                 # if record.name == self.name:
                 if record.name == self.server:
-                    self.address = record.address
+                    if record.address not in self.addresses:
+                        self.addresses.append(record.address)
             elif record.type == _TYPE_SRV:
                 if record.name == self.name:
                     self.server = record.server
@@ -1481,12 +1496,12 @@ class ServiceInfo(object):
             if cached:
                 self.update_record(zc, now, cached)
 
-        if None not in (self.server, self.address, self.text):
+        if None not in (self.server, self.text) and not self.addresses:
             return True
 
         try:
             zc.add_listener(self, DNSQuestion(self.name, _TYPE_ANY, _CLASS_IN))
-            while None in (self.server, self.address, self.text):
+            while None in (self.server, self.text) or not self.addresses:
                 if last <= now:
                     return False
                 if next_ <= now:
@@ -1535,7 +1550,7 @@ class ServiceInfo(object):
             ', '.join(
                 '%s=%r' % (name, getattr(self, name))
                 for name in (
-                    'type', 'name', 'address', 'port', 'weight', 'priority',
+                    'type', 'name', 'addresses', 'port', 'weight', 'priority',
                     'server', 'properties',
                 )
             )
@@ -1775,10 +1790,10 @@ class Zeroconf(QuietLogger):
 
             out.add_answer_at_time(
                 DNSText(info.name, _TYPE_TXT, _CLASS_IN, ttl, info.text), 0)
-            if info.address:
+            for address in info.addresses:
                 out.add_answer_at_time(
                     DNSAddress(info.server, _TYPE_A, _CLASS_IN,
-                               ttl, info.address), 0)
+                               ttl, address), 0)
             self.send(out)
             i += 1
             next_time += _REGISTER_TIME
@@ -1810,10 +1825,10 @@ class Zeroconf(QuietLogger):
             out.add_answer_at_time(
                 DNSText(info.name, _TYPE_TXT, _CLASS_IN, 0, info.text), 0)
 
-            if info.address:
+            for address in info.addresses:
                 out.add_answer_at_time(
                     DNSAddress(info.server, _TYPE_A, _CLASS_IN, 0,
-                               info.address), 0)
+                               address), 0)
             self.send(out)
             i += 1
             next_time += _UNREGISTER_TIME
@@ -1838,10 +1853,10 @@ class Zeroconf(QuietLogger):
                         info.priority, info.weight, info.port, info.server), 0)
                     out.add_answer_at_time(DNSText(
                         info.name, _TYPE_TXT, _CLASS_IN, 0, info.text), 0)
-                    if info.address:
+                    for address in info.addresses:
                         out.add_answer_at_time(DNSAddress(
                             info.server, _TYPE_A, _CLASS_IN, 0,
-                            info.address), 0)
+                            address), 0)
                 self.send(out)
                 i += 1
                 next_time += _UNREGISTER_TIME
@@ -1974,10 +1989,10 @@ class Zeroconf(QuietLogger):
                     if question.type in (_TYPE_A, _TYPE_ANY):
                         for service in self.services.values():
                             if service.server == question.name.lower():
-                                out.add_answer(msg, DNSAddress(
-                                    question.name, _TYPE_A,
-                                    _CLASS_IN | _CLASS_UNIQUE,
-                                    _DNS_TTL, service.address))
+                                for address in service.addresses:
+                                    out.add_answer(msg, DNSAddress(question.name,
+                                                                   _TYPE_A, _CLASS_IN | _CLASS_UNIQUE,
+                                                                   _DNS_TTL, address))
 
                     service = self.services.get(question.name.lower(), None)
                     if not service:
@@ -1993,9 +2008,10 @@ class Zeroconf(QuietLogger):
                             question.name, _TYPE_TXT, _CLASS_IN | _CLASS_UNIQUE,
                             _DNS_TTL, service.text))
                     if question.type == _TYPE_SRV:
-                        out.add_additional_answer(DNSAddress(
-                            service.server, _TYPE_A, _CLASS_IN | _CLASS_UNIQUE,
-                            _DNS_TTL, service.address))
+                        for address in service.addresses:
+                            out.add_additional_answer(DNSAddress(service.server,
+                                                                 _TYPE_A, _CLASS_IN | _CLASS_UNIQUE,
+                                                                 _DNS_TTL, address))
                 except Exception:  # TODO stop catching all Exceptions
                     self.log_exception_warning()
 
